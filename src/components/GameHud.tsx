@@ -1,12 +1,13 @@
 import React from 'react';
 import {
+  EyeOff,
   Magnet,
   Pause,
   Rocket,
-  Shield,
-  Sparkles,
+  ShieldCheck,
   Zap,
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { HudSnapshot, PowerUpType } from '../types/game';
 import { FlutonTokenIcon } from './FlutonTokenIcon';
 
@@ -18,11 +19,11 @@ interface GameHudProps {
 }
 
 function PowerUpIcon({ type }: { type: PowerUpType }) {
-  if (type === 'magnet') return <Magnet className="w-4 h-4 text-purple-300" />;
-  if (type === 'shield') return <Shield className="w-4 h-4 text-purple-300" />;
-  if (type === 'boost') return <Rocket className="w-4 h-4 text-purple-300" />;
-  if (type === 'hoverboard') return <Zap className="w-4 h-4 text-purple-300" />;
-  return <Sparkles className="w-4 h-4 text-purple-300" />;
+  if (type === 'fhe') return <ShieldCheck className="w-4 h-4 text-purple-300" />;
+  if (type === 'zero_mev') return <Zap className="w-4 h-4 text-fuchsia-300" />;
+  if (type === 'encrypted_intents') return <EyeOff className="w-4 h-4 text-violet-300" />;
+  if (type === 'confidential_settlement') return <Magnet className="w-4 h-4 text-purple-300" />;
+  return <Rocket className="w-4 h-4 text-purple-300" />;
 }
 
 export const GameHud: React.FC<GameHudProps> = ({
@@ -71,9 +72,9 @@ export const GameHud: React.FC<GameHudProps> = ({
             <span className="text-[11px] font-semibold tracking-wider text-purple-300">
               SCORE
             </span>
-            {hud.multiplier > 1 && (
-              <span className="px-1.5 py-0.5 rounded bg-purple-600 text-white font-mono-nums text-[11px] font-bold">
-                {hud.multiplier}×
+            {hud.stealthActive && (
+              <span className="px-1.5 py-0.5 rounded bg-purple-700 text-white font-display text-[10px] font-bold tracking-wider">
+                STEALTH
               </span>
             )}
           </div>
@@ -88,7 +89,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
 
         {/* Center Event Banner (Transient, non-blocking) */}
-        {hud.bannerMessage && (
+        {hud.bannerMessage && !hud.pickupBanner && (
           <div className="hidden sm:block bg-purple-700/95 border border-purple-300/40 rounded-xl px-5 py-2 text-sm font-display font-bold tracking-wider text-white shadow-xl">
             {hud.bannerMessage}
           </div>
@@ -117,28 +118,71 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       </div>
 
+      {/* Center-Top Floating Power-Up Activation + "+10 FLUTON COINS" Reward Animation */}
+      <div className="pointer-events-none fixed inset-x-0 top-20 sm:top-24 flex justify-center px-4">
+        <AnimatePresence mode="wait">
+          {hud.pickupBanner && (
+            <motion.div
+              key={hud.pickupBanner.id}
+              initial={{ opacity: 0, y: 18, scale: 0.86 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -16, scale: 0.94 }}
+              transition={{ type: 'spring', stiffness: 360, damping: 24 }}
+              className="flex flex-col items-center text-center"
+            >
+              <div className="bg-[#0b0914]/94 border-2 border-purple-400 rounded-2xl px-6 py-3 shadow-[0_0_28px_rgba(168,85,247,0.55)]">
+                <div className="flex items-center justify-center gap-2 text-lg sm:text-2xl font-display font-black tracking-wider text-white">
+                  <PowerUpIcon type={hud.pickupBanner.type} />
+                  <span>{hud.pickupBanner.title}</span>
+                </div>
+                <div className="text-xs sm:text-sm font-medium text-purple-200 mt-0.5">
+                  {hud.pickupBanner.subtitle}
+                </div>
+              </div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.85 }}
+                animate={{ opacity: 1, y: -2, scale: 1.04 }}
+                transition={{ delay: 0.06, type: 'spring', stiffness: 420, damping: 20 }}
+                className="mt-2 inline-flex items-center gap-2 bg-purple-600 border border-purple-200/70 rounded-xl px-4 py-1.5 shadow-xl"
+              >
+                <FlutonTokenIcon size={22} />
+                <span className="font-display text-sm sm:text-base font-extrabold tracking-wider text-white">
+                  {hud.pickupBanner.bonusText}
+                </span>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       {/* Bottom Bar: Active Power-Up Timers & Hoverboard Trigger */}
       <div className="flex items-end justify-between gap-3">
-        <div className="flex flex-col gap-2 max-w-[230px] w-full">
+        <div className="flex flex-col gap-2 max-w-[260px] w-full">
           {hud.activePowerUps.map((pu) => {
-            const pct = pu.type === 'shield' ? 100 : Math.max(0, Math.min(100, (pu.remaining / pu.duration) * 100));
+            const pct = Math.max(0, Math.min(100, (pu.remaining / pu.duration) * 100));
             return (
               <div
                 key={pu.type}
-                className="bg-[#0b0914]/90 border border-purple-500/40 rounded-xl px-3 py-2 shadow-lg"
+                className="bg-[#0b0914]/92 border border-purple-500/45 rounded-xl px-3 py-2 shadow-lg"
               >
-                <div className="flex items-center justify-between text-xs font-semibold text-white">
-                  <span className="flex items-center gap-1.5">
+                <div className="flex items-center justify-between gap-2 text-xs font-semibold text-white">
+                  <span className="flex items-center gap-1.5 truncate">
                     <PowerUpIcon type={pu.type} />
-                    <span>{pu.label}</span>
+                    <span className="font-display tracking-wide truncate">{pu.label}</span>
                   </span>
-                  <span className="font-mono-nums text-purple-200">
-                    {pu.type === 'shield' ? 'READY' : `${pu.remaining.toFixed(1)}s`}
+                  <span className="font-mono-nums text-purple-200 shrink-0">
+                    {pu.remaining.toFixed(1)}s
                   </span>
                 </div>
+                {pu.subtitle && (
+                  <div className="text-[10px] text-purple-300/90 mt-0.5 truncate">
+                    {pu.subtitle}
+                  </div>
+                )}
                 <div className="mt-1.5 h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-purple-500 transition-[width] duration-75"
+                    className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-400 transition-[width] duration-75"
                     style={{ width: `${pct}%` }}
                   />
                 </div>

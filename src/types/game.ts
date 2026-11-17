@@ -11,12 +11,13 @@ export type GraphicsQuality = 'low' | 'medium' | 'high';
 
 export type LaneIndex = -1 | 0 | 1;
 
-export type PowerUpType =
-  | 'magnet'
-  | 'shield'
-  | 'boost'
-  | 'hoverboard'
-  | 'multiplier';
+export type CollectiblePowerUpType =
+  | 'fhe'
+  | 'zero_mev'
+  | 'encrypted_intents'
+  | 'confidential_settlement';
+
+export type PowerUpType = CollectiblePowerUpType | 'hoverboard';
 
 export type CharacterSkinId = 'classic' | 'violet' | 'chrome' | 'gala';
 export type HoverboardSkinId = 'mk1' | 'violet_pulse' | 'phantom' | 'prism';
@@ -92,8 +93,17 @@ export interface SaveData {
 export interface ActivePowerUpHUD {
   type: PowerUpType;
   label: string;
+  subtitle?: string;
   remaining: number;
   duration: number;
+}
+
+export interface PowerUpPickupBanner {
+  id: number;
+  type: CollectiblePowerUpType;
+  title: string;
+  subtitle: string;
+  bonusText: string;
 }
 
 export interface IntroCaptionState {
@@ -113,9 +123,11 @@ export interface HudSnapshot {
   speedKmh: number;
   multiplier: number;
   hasShield: boolean;
+  stealthActive: boolean;
   hoverboardActive: boolean;
   hoverboardCharge: number; // 0..100
   activePowerUps: ActivePowerUpHUD[];
+  pickupBanner: PowerUpPickupBanner | null;
   introCaption: IntroCaptionState;
   isNewBest: boolean;
   chaseProximity: number; // 0 = far, 1 = right behind player

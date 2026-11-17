@@ -1,14 +1,17 @@
 import * as THREE from 'three';
 import {
   CharacterSkinDef,
+  CollectiblePowerUpType,
   GraphicsQuality,
   HoverboardSkinDef,
   PowerUpType,
 } from '../types/game';
 import {
+  createEncryptionGlyphTexture,
   createFlutonTokenTexture,
   createForeheadLogoTexture,
   createHazardStripeTexture,
+  createPowerUpLabelTexture,
   createTrainSideTexture,
 } from './textures';
 
@@ -25,7 +28,10 @@ export interface FlutonCatRig {
   sprayCan: THREE.Group;
   shieldShell: THREE.Mesh;
   speedRing: THREE.Mesh;
+  magnetRing: THREE.Mesh;
+  furMat: THREE.MeshStandardMaterial;
   suitMat: THREE.MeshStandardMaterial;
+  shirtMat: THREE.MeshStandardMaterial;
   trimMat: THREE.MeshStandardMaterial;
   glowMat: THREE.MeshBasicMaterial;
 }
@@ -147,10 +153,16 @@ export class SharedAssetRegistry {
 
   // PowerUp shared assets
   public readonly puAuraGeo: THREE.TorusGeometry;
+  public readonly puLabelGeo: THREE.PlaneGeometry;
   public readonly puAuraMat: THREE.MeshBasicMaterial;
   public readonly puCoreMat: THREE.MeshStandardMaterial;
   public readonly puSilverMat: THREE.MeshStandardMaterial;
+  public readonly puDarkHullMat: THREE.MeshStandardMaterial;
+  public readonly puCipherMat: THREE.MeshStandardMaterial;
+  public readonly puHoloMat: THREE.MeshStandardMaterial;
+  public readonly puLightningMat: THREE.MeshStandardMaterial;
   public readonly puBadgeMat: THREE.MeshBasicMaterial;
+  public readonly puLabelMats: Record<CollectiblePowerUpType, THREE.MeshBasicMaterial>;
 
   // Palm tree shared assets
   public readonly palmTrunkGeo: THREE.CylinderGeometry;
@@ -345,16 +357,18 @@ export class SharedAssetRegistry {
       );
     }
 
-    // PowerUps
-    this.puAuraGeo = this.regGeo(new THREE.TorusGeometry(0.56, 0.035, 8, 24));
+    // PowerUps (FHE, ZERO MEV, ENCRYPTED INTENTS, CONFIDENTIAL SETTLEMENT)
+    const cipherTex = this.regTex(createEncryptionGlyphTexture(maxAnisotropy));
+    this.puAuraGeo = this.regGeo(new THREE.TorusGeometry(0.56, 0.032, 8, 24));
+    this.puLabelGeo = this.regGeo(new THREE.PlaneGeometry(1.85, 0.56));
     this.puAuraMat = this.regMat(
-      new THREE.MeshBasicMaterial({ color: 0xc084fc, transparent: true, opacity: 0.85 })
+      new THREE.MeshBasicMaterial({ color: 0xc084fc, transparent: true, opacity: 0.88 })
     );
     this.puCoreMat = this.regMat(
       new THREE.MeshStandardMaterial({
         color: 0x9333ea,
         emissive: 0x7e22ce,
-        emissiveIntensity: 0.65,
+        emissiveIntensity: 0.72,
         metalness: 0.75,
         roughness: 0.2,
       })
@@ -362,9 +376,76 @@ export class SharedAssetRegistry {
     this.puSilverMat = this.regMat(
       new THREE.MeshStandardMaterial({ color: 0xf8fafc, metalness: 0.9, roughness: 0.15 })
     );
+    this.puDarkHullMat = this.regMat(
+      new THREE.MeshStandardMaterial({
+        color: 0x090812,
+        metalness: 0.75,
+        roughness: 0.28,
+      })
+    );
+    this.puCipherMat = this.regMat(
+      new THREE.MeshStandardMaterial({
+        map: cipherTex,
+        emissive: 0x9333ea,
+        emissiveMap: cipherTex,
+        emissiveIntensity: 0.95,
+        roughness: 0.25,
+        metalness: 0.4,
+      })
+    );
+    this.puHoloMat = this.regMat(
+      new THREE.MeshStandardMaterial({
+        color: 0xc084fc,
+        emissive: 0x9333ea,
+        emissiveIntensity: 1.05,
+        transparent: true,
+        opacity: 0.56,
+        roughness: 0.15,
+        metalness: 0.25,
+      })
+    );
+    this.puLightningMat = this.regMat(
+      new THREE.MeshStandardMaterial({
+        color: 0xf3e8ff,
+        emissive: 0xa855f7,
+        emissiveIntensity: 1.45,
+        roughness: 0.18,
+        metalness: 0.55,
+      })
+    );
     this.puBadgeMat = this.regMat(
       new THREE.MeshBasicMaterial({ map: this.tokenTex, side: THREE.DoubleSide })
     );
+    this.puLabelMats = {
+      fhe: this.regMat(
+        new THREE.MeshBasicMaterial({
+          map: this.regTex(createPowerUpLabelTexture(maxAnisotropy, 'FHE', 'ENERGY SHIELD · +10')),
+          transparent: true,
+          depthWrite: false,
+        })
+      ),
+      zero_mev: this.regMat(
+        new THREE.MeshBasicMaterial({
+          map: this.regTex(createPowerUpLabelTexture(maxAnisotropy, 'ZERO MEV', 'LIGHTNING BOOST · +10')),
+          transparent: true,
+          depthWrite: false,
+        })
+      ),
+      encrypted_intents: this.regMat(
+        new THREE.MeshBasicMaterial({
+          map: this.regTex(createPowerUpLabelTexture(maxAnisotropy, 'ENCRYPTED INTENTS', 'STEALTH CLOAK · +10')),
+          transparent: true,
+          depthWrite: false,
+        })
+      ),
+      confidential_settlement: this.regMat(
+        new THREE.MeshBasicMaterial({
+          map: this.regTex(createPowerUpLabelTexture(maxAnisotropy, 'CONFIDENTIAL SETTLEMENT', 'TOKEN MAGNET · +10')),
+          transparent: true,
+          depthWrite: false,
+        })
+      ),
+    };
 
     // Palm Trees
     this.palmTrunkGeo = this.regGeo(new THREE.CylinderGeometry(0.14, 0.26, 4.2, 7));
@@ -834,6 +915,22 @@ export function createFlutonCat(
   speedRing.visible = false;
   root.add(speedRing);
 
+  // --- PURPLE MAGNETIC SETTLEMENT RING (Active during CONFIDENTIAL SETTLEMENT) ---
+  const magnetRing = new THREE.Mesh(
+    assets.regGeo(new THREE.TorusGeometry(0.74, 0.028, 8, 28)),
+    assets.regMat(
+      new THREE.MeshBasicMaterial({
+        color: 0xe879f9,
+        transparent: true,
+        opacity: 0.82,
+      })
+    )
+  );
+  magnetRing.rotation.x = Math.PI / 2;
+  magnetRing.position.y = 0.95;
+  magnetRing.visible = false;
+  root.add(magnetRing);
+
   return {
     root,
     bodyPivot,
@@ -847,7 +944,10 @@ export function createFlutonCat(
     sprayCan,
     shieldShell,
     speedRing,
+    magnetRing,
+    furMat,
     suitMat,
+    shirtMat,
     trimMat,
     glowMat,
   };
@@ -1344,81 +1444,132 @@ export function createObstacleMesh(
 }
 
 /**
- * Builds distinctive 3D Fluton Power-Up collectibles using shared assets.
+ * Builds the 4 Fluton Ecosystem 3D Power-Up collectibles with upright camera-facing labels.
  */
 export function createPowerUpMesh(
   type: PowerUpType,
   assets: SharedAssetRegistry
 ): THREE.Group {
   const group = new THREE.Group();
+  const spinGroup = new THREE.Group();
+  group.add(spinGroup);
+  group.userData.spinGroup = spinGroup;
 
-  const auraRing = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
-  group.add(auraRing);
+  if (type === 'fhe') {
+    // FHE: Black & purple energy capsule + digital encryption cylinder + orbiting nodes
+    const auraRing = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
+    auraRing.rotation.x = 0.45;
+    spinGroup.add(auraRing);
 
-  if (type === 'magnet') {
-    const uMesh = new THREE.Mesh(
-      assets.regGeo(new THREE.TorusGeometry(0.26, 0.085, 8, 16, Math.PI)),
-      assets.puCoreMat
+    const capsuleCore = new THREE.Mesh(
+      assets.regGeo(new THREE.CylinderGeometry(0.24, 0.24, 0.62, 12)),
+      assets.puCipherMat
     );
-    uMesh.rotation.z = Math.PI;
-    uMesh.position.y = 0.06;
-    group.add(uMesh);
-    const tipGeo = assets.regGeo(new THREE.CylinderGeometry(0.085, 0.085, 0.16, 8));
-    for (const sx of [-0.26, 0.26]) {
-      const tip = new THREE.Mesh(tipGeo, assets.puSilverMat);
-      tip.position.set(sx, 0.14, 0);
-      group.add(tip);
+    spinGroup.add(capsuleCore);
+
+    const capGeo = assets.regGeo(new THREE.CylinderGeometry(0.265, 0.265, 0.12, 12));
+    const topCap = new THREE.Mesh(capGeo, assets.puDarkHullMat);
+    topCap.position.y = 0.34;
+    const botCap = new THREE.Mesh(capGeo, assets.puDarkHullMat);
+    botCap.position.y = -0.34;
+    spinGroup.add(topCap, botCap);
+
+    const nodeGeo = assets.regGeo(new THREE.OctahedronGeometry(0.08, 0));
+    for (const sx of [-0.46, 0.46]) {
+      const node = new THREE.Mesh(nodeGeo, assets.puSilverMat);
+      node.position.set(sx, 0, 0);
+      spinGroup.add(node);
     }
-  } else if (type === 'shield') {
-    const shield = new THREE.Mesh(
-      assets.regGeo(new THREE.OctahedronGeometry(0.36, 0)),
+  } else if (type === 'zero_mev') {
+    // ZERO MEV: Purple lightning-shaped collectible + electric ring
+    const auraRing = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
+    spinGroup.add(auraRing);
+
+    const bolt = new THREE.Shape();
+    bolt.moveTo(0.08, 0.46);
+    bolt.lineTo(-0.24, 0.04);
+    bolt.lineTo(-0.02, 0.04);
+    bolt.lineTo(-0.14, -0.46);
+    bolt.lineTo(0.26, -0.02);
+    bolt.lineTo(0.04, -0.02);
+    bolt.closePath();
+
+    const boltGeo = assets.regGeo(
+      new THREE.ExtrudeGeometry(bolt, {
+        depth: 0.14,
+        bevelEnabled: true,
+        bevelThickness: 0.03,
+        bevelSize: 0.03,
+        bevelSegments: 2,
+      })
+    );
+    boltGeo.center();
+    const boltMesh = new THREE.Mesh(boltGeo, assets.puLightningMat);
+    spinGroup.add(boltMesh);
+
+    const frame = new THREE.Mesh(
+      assets.regGeo(new THREE.TorusGeometry(0.46, 0.025, 6, 6)),
+      assets.puDarkHullMat
+    );
+    spinGroup.add(frame);
+  } else if (type === 'encrypted_intents') {
+    // ENCRYPTED INTENTS: Futuristic holographic purple capsule + twin digital rings
+    const ring1 = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
+    ring1.rotation.set(0.55, 0.35, 0);
+    const ring2 = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
+    ring2.rotation.set(-0.55, -0.35, 0);
+    spinGroup.add(ring1, ring2);
+
+    const innerCipher = new THREE.Mesh(
+      assets.regGeo(new THREE.OctahedronGeometry(0.22, 0)),
+      assets.puCipherMat
+    );
+    innerCipher.scale.set(0.85, 1.45, 0.85);
+    spinGroup.add(innerCipher);
+
+    const holoCapsule = new THREE.Mesh(
+      assets.regGeo(new THREE.CapsuleGeometry(0.26, 0.38, 6, 12)),
+      assets.puHoloMat
+    );
+    spinGroup.add(holoCapsule);
+  } else if (type === 'confidential_settlement') {
+    // CONFIDENTIAL SETTLEMENT: Premium purple energy orb + dual glowing circular rings
+    const orb = new THREE.Mesh(
+      assets.regGeo(new THREE.IcosahedronGeometry(0.3, 1)),
       assets.puCoreMat
     );
-    shield.scale.set(1, 1.25, 0.45);
-    group.add(shield);
-    const rim = new THREE.Mesh(
-      assets.regGeo(new THREE.TorusGeometry(0.36, 0.035, 6, 6)),
+    spinGroup.add(orb);
+
+    const ringOuter = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
+    const ringEquatorial = new THREE.Mesh(
+      assets.regGeo(new THREE.TorusGeometry(0.45, 0.03, 8, 22)),
       assets.puSilverMat
     );
-    group.add(rim);
-  } else if (type === 'boost') {
-    const rocket = new THREE.Mesh(
-      assets.regGeo(new THREE.ConeGeometry(0.2, 0.58, 10)),
-      assets.puCoreMat
+    ringEquatorial.rotation.x = Math.PI / 2;
+    const ringTilt = new THREE.Mesh(
+      assets.regGeo(new THREE.TorusGeometry(0.5, 0.024, 8, 22)),
+      assets.puAuraMat
     );
-    rocket.rotation.x = -Math.PI / 4;
-    group.add(rocket);
-    const fin = new THREE.Mesh(
-      assets.regGeo(new THREE.BoxGeometry(0.46, 0.06, 0.2)),
-      assets.puSilverMat
-    );
-    fin.rotation.x = -Math.PI / 4;
-    group.add(fin);
-  } else if (type === 'hoverboard') {
+    ringTilt.rotation.set(0.7, 0.6, 0);
+    spinGroup.add(ringOuter, ringEquatorial, ringTilt);
+  } else {
+    // Fallback / Hoverboard icon
+    const auraRing = new THREE.Mesh(assets.puAuraGeo, assets.puAuraMat);
+    spinGroup.add(auraRing);
     const miniBoard = new THREE.Mesh(
       assets.regGeo(new THREE.BoxGeometry(0.28, 0.06, 0.65)),
       assets.puCoreMat
     );
     miniBoard.rotation.set(0.35, 0.5, 0.2);
-    group.add(miniBoard);
-    const trim = new THREE.Mesh(
-      assets.regGeo(new THREE.BoxGeometry(0.31, 0.04, 0.55)),
-      assets.puSilverMat
-    );
-    trim.rotation.set(0.35, 0.5, 0.2);
-    group.add(trim);
-  } else {
-    const prism = new THREE.Mesh(
-      assets.regGeo(new THREE.IcosahedronGeometry(0.32, 0)),
-      assets.puCoreMat
-    );
-    group.add(prism);
-    const badge = new THREE.Mesh(
-      assets.regGeo(new THREE.CircleGeometry(0.24, 16)),
-      assets.puBadgeMat
-    );
-    badge.position.z = 0.25;
-    group.add(badge);
+    spinGroup.add(miniBoard);
+  }
+
+  // Upright camera-facing floating label directly above collectible (always readable!)
+  if (type !== 'hoverboard') {
+    const labelMat = assets.puLabelMats[type];
+    const labelPlate = new THREE.Mesh(assets.puLabelGeo, labelMat);
+    labelPlate.position.set(0, 0.88, 0);
+    group.add(labelPlate);
   }
 
   return group;

@@ -504,3 +504,91 @@ export function createRadialShadowTexture(): THREE.CanvasTexture {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+export function createPowerUpLabelTexture(
+  maxAnisotropy: number,
+  title: string,
+  subtitle: string
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 160;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.clearRect(0, 0, 512, 160);
+
+  // Sleek dark obsidian pill backdrop with glowing violet border
+  ctx.fillStyle = 'rgba(9, 8, 18, 0.92)';
+  ctx.beginPath();
+  ctx.roundRect(12, 14, 488, 132, 24);
+  ctx.fill();
+
+  const borderGrad = ctx.createLinearGradient(12, 14, 500, 146);
+  borderGrad.addColorStop(0, '#c084fc');
+  borderGrad.addColorStop(0.5, '#ffffff');
+  borderGrad.addColorStop(1, '#9333ea');
+  ctx.strokeStyle = borderGrad;
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.roundRect(12, 14, 488, 132, 24);
+  ctx.stroke();
+
+  // Top & bottom subtle accent bars
+  ctx.fillStyle = '#9333ea';
+  ctx.fillRect(48, 22, 416, 4);
+
+  // Main power-up title
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const fontSize = title.length > 16 ? 34 : title.length > 10 ? 40 : 54;
+  ctx.font = `700 ${fontSize}px "Chakra Petch", sans-serif`;
+  ctx.shadowColor = '#a855f7';
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(title, 256, 72);
+
+  // Subtitle + +10 coins indicator
+  ctx.shadowBlur = 0;
+  ctx.font = '600 20px "Plus Jakarta Sans", sans-serif';
+  ctx.fillStyle = '#d8b4fe';
+  ctx.fillText(subtitle, 256, 118);
+
+  return finalizeColorTexture(canvas, maxAnisotropy);
+}
+
+export function createEncryptionGlyphTexture(
+  maxAnisotropy: number
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#090714';
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.strokeStyle = 'rgba(168, 85, 247, 0.35)';
+  ctx.lineWidth = 2;
+  for (let y = 0; y < 256; y += 32) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(256, y);
+    ctx.stroke();
+  }
+
+  const glyphs = ['0xFHE', '10110', '<ENC>', 'ZK::01', '0x9A', 'Σ[x]', 'MEV=0', '01101'];
+  ctx.font = '700 18px "JetBrains Mono", monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 3; col++) {
+      const idx = (row * 3 + col) % glyphs.length;
+      ctx.fillStyle = (row + col) % 2 === 0 ? '#c084fc' : '#ffffff';
+      ctx.globalAlpha = 0.6 + ((row + col) % 3) * 0.14;
+      ctx.fillText(glyphs[idx], 10 + col * 86, 16 + row * 32);
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  return finalizeColorTexture(canvas, maxAnisotropy);
+}

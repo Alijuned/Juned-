@@ -3,12 +3,14 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import {
   ActivePowerUpHUD,
   CharacterSkinId,
+  CollectiblePowerUpType,
   GamePhase,
   GraphicsQuality,
   HoverboardSkinId,
   HudSnapshot,
   IntroCaptionState,
   LaneIndex,
+  PowerUpPickupBanner,
   PowerUpType,
 } from '../types/game';
 import { audioEngine } from './audio';
@@ -57,6 +59,9 @@ const _color = new THREE.Color();
 interface TrackChunk {
   group: THREE.Group;
   zStart: number;
+  hasGFlutonBanner: boolean;
+  bannerZOffset: number;
+  bannerAnnounced: boolean;
 }
 
 type ObstacleKind =
@@ -122,10 +127,12 @@ interface ActiveToken {
 }
 
 interface ActivePowerUp {
-  type: PowerUpType;
+  type: CollectiblePowerUpType;
   lane: LaneIndex;
   y: number;
   z: number;
+  collected: boolean;
+  collectAnim: number;
   slot: PooledPowerUpSlot;
   mesh: THREE.Group;
 }
@@ -237,14 +244,19 @@ export class FlutonEngine {
   private stumbleTimer = 0;
   private chaseSoundTimer = 3.5;
 
-  // Power-Ups
-  private magnetTimer = 0;
-  private boostTimer = 0;
-  private multiplierTimer = 0;
+  // Fluton Ecosystem Power-Ups
+  private fheTimer = 0; // FHE: Protective energy shield
+  private zeroMevTimer = 0; // ZERO MEV: Lightning speed boost
+  private stealthTimer = 0; // ENCRYPTED INTENTS: Stealth mode + obstacle phase
+  private settlementTimer = 0; // CONFIDENTIAL SETTLEMENT: Coin magnet
+  private isStealthVisualActive = false;
   private hoverboardTimer = 0;
   private hasShield = false;
   private hoverboardCharge = 100;
   private invulnTimer = 0;
+  private lastPowerUpSpawnZ = -20;
+  private lastPowerUpType: CollectiblePowerUpType | null = null;
+  private nextPickupBannerId = 1;
 
   // Intro State
   private introTime = 0;
@@ -255,6 +267,8 @@ export class FlutonEngine {
   // Banner feedback
   private bannerMessage: string | null = null;
   private bannerTimer = 0;
+  private pickupBanner: PowerUpPickupBanner | null = null;
+  private pickupBannerTimer = 0;
 
   // Current Skins
   private charSkinId: CharacterSkinId = 'classic';
@@ -669,6 +683,7 @@ export class FlutonEngine {
         }
       }
 
+      let hasGFlutonBanner = false;
       if (i % 6 === 4) {
         const tunnelWallL = new THREE.Mesh(tunnelWallGeo, archMat);
         tunnelWallL.position.set(-6.1, 3.1, 0);
@@ -689,7 +704,8 @@ export class FlutonEngine {
         span.castShadow = true;
         group.add(span);
 
-        const sign = new THREE.Mesh(signGeo, i % 4 === 1 ? signMat1 : signMat2);
+        hasGFlutonBanner = i % 4 === 1;
+        const sign = new THREE.Mesh(signGeo, hasGFlutonBanner ? signMat1 : signMat2);
         sign.position.set(0, 6.2, 0.58);
         group.add(sign);
 
@@ -701,7 +717,13 @@ export class FlutonEngine {
       }
 
       group.position.z = zStart;
-      this.chunks.push({ group, zStart });
+      this.chunks.push({
+        group,
+        zStart,
+        hasGFlutonBanner,
+        bannerZOffset: 0.58,
+        bannerAnnounced: false,
+      });
       this.scene.add(group);
     }
   }
@@ -790,8 +812,13 @@ export class FlutonEngine {
       this.tokenPool.push({ inUse: false, mesh });
     }
 
-    // 4. Pre-build Power-Up Pool (2 per type = 10)
-    const puTypes: PowerUpType[] = ['magnet', 'shield', 'boost', 'hoverboard', 'multiplier'];
+    // 4. Pre-build Fluton Power-Up Pool (2 per ecosystem type = 8)
+    const puTypes: CollectiblePowerUpType[] = [
+      'fhe',
+      'zero_mev',
+      'encrypted_intents',
+      'confidential_settlement',
+    ];
     for (const type of puTypes) {
       for (let c = 0; c < 2; c++) {
         const mesh = createPowerUpMesh(type, this.assets);
@@ -1030,19 +1057,26 @@ export class FlutonEngine {
     this.chaseDist = 5.4;
     this.stumbleTimer = 0;
     this.chaseSoundTimer = 3.5;
-    this.magnetTimer = 0;
-    this.boostTimer = 0;
-    this.multiplierTimer = 0;
+    this.fheTimer = 0;
+    this.zeroMevTimer = 0;
+    this.stealthTimer = 0;
+    this.settlementTimer = 0;
+    this.setStealthVisual(false);
     this.hoverboardTimer = 0;
     this.hasShield = false;
     this.hoverboardCharge = 100;
     this.invulnTimer = 0;
+    this.lastPowerUpSpawnZ = -20;
+    this.lastPowerUpType = null;
     this.bannerMessage = null;
     this.bannerTimer = 0;
+    this.pickupBanner = null;
+    this.pickupBannerTimer = 0;
 
     this.playerRig.sprayCan.visible = false;
     this.playerRig.shieldShell.visible = false;
     this.playerRig.speedRing.visible = false;
+    this.playerRig.magnetRing.visible = false;
     this.playerRig.bodyPivot.scale.set(1, 1, 1);
     this.playerRig.bodyPivot.position.set(0, 0, 0);
     this.playerRig.bodyPivot.rotation.set(0, 0, 0);
@@ -1095,6 +1129,7 @@ export class FlutonEngine {
     this.introTrain.group.visible = false;
     this.playerRig.sprayCan.visible = false;
     this.playerRig.root.rotation.set(0, 0, 0);
+    this.resetChunks();
     this.playerX = LANE_X[1];
     this.playerY = 0;
     this.playerZ = 0;
@@ -1113,12 +1148,14 @@ export class FlutonEngine {
     if (this.phase === 'playing' && !this.collisionLocked) {
       this.phase = 'paused';
       audioEngine.setBoostTempo(false);
+      audioEngine.stopBannerVoice();
       this.emitHud(true);
     }
   }
 
   public resumeGame(): void {
     if (this.phase === 'paused') {
+      audioEngine.unlock();
       this.phase = 'playing';
       this.lastTime = performance.now();
       this.emitHud(true);
@@ -1139,9 +1176,20 @@ export class FlutonEngine {
     this.playerRig.bodyPivot.position.set(0, 0, 0);
     this.playerRig.bodyPivot.rotation.set(0, 0, 0);
     this.playerRig.bodyPivot.scale.set(1, 1, 1);
+    this.fheTimer = 0;
+    this.zeroMevTimer = 0;
+    this.stealthTimer = 0;
+    this.settlementTimer = 0;
+    this.hasShield = false;
+    this.hoverboardTimer = 0;
+    this.pickupBanner = null;
+    this.pickupBannerTimer = 0;
+    this.bannerMessage = null;
+    this.setStealthVisual(false);
     this.playerRig.sprayCan.visible = false;
     this.playerRig.shieldShell.visible = false;
     this.playerRig.speedRing.visible = false;
+    this.playerRig.magnetRing.visible = false;
     this.hoverboardRig.root.visible = true;
     this.hoverboardRig.root.position.set(0, 0.18, 0);
     this.officerRig.root.visible = false;
@@ -1149,6 +1197,7 @@ export class FlutonEngine {
     this.introTrain.group.visible = false;
     audioEngine.setBoostTempo(false);
     audioEngine.stopMusic();
+    audioEngine.stopBannerVoice();
     this.emitHud(true);
   }
 
@@ -1156,6 +1205,7 @@ export class FlutonEngine {
     for (let i = 0; i < this.chunks.length; i++) {
       this.chunks[i].zStart = 20 - i * CHUNK_LEN;
       this.chunks[i].group.position.z = this.chunks[i].zStart;
+      this.chunks[i].bannerAnnounced = false;
     }
   }
 
@@ -1425,24 +1475,68 @@ export class FlutonEngine {
     // Extra safety guard: NEVER run gameplay updates if collision already triggered
     if (this.collisionLocked || this.phase !== 'playing') return;
 
-    if (this.magnetTimer > 0) this.magnetTimer = Math.max(0, this.magnetTimer - dt);
-    if (this.multiplierTimer > 0) this.multiplierTimer = Math.max(0, this.multiplierTimer - dt);
+    if (this.pickupBannerTimer > 0) {
+      this.pickupBannerTimer -= dt;
+      if (this.pickupBannerTimer <= 0) {
+        this.pickupBanner = null;
+      }
+    }
+
+    if (this.fheTimer > 0) {
+      this.fheTimer = Math.max(0, this.fheTimer - dt);
+      if (this.fheTimer <= 0) {
+        this.hasShield = false;
+      }
+    }
+
+    if (this.settlementTimer > 0) {
+      this.settlementTimer = Math.max(0, this.settlementTimer - dt);
+      if (Math.random() < 0.25) {
+        const angle = Math.random() * Math.PI * 2;
+        this.spawnParticles(
+          this.playerX + Math.cos(angle) * 0.75,
+          this.playerY + 0.95,
+          this.playerZ + Math.sin(angle) * 0.75,
+          0xe879f9,
+          1,
+          1.4
+        );
+      }
+    }
+
+    if (this.stealthTimer > 0) {
+      this.stealthTimer = Math.max(0, this.stealthTimer - dt);
+      if (Math.random() < 0.35) {
+        this.spawnParticles(
+          this.playerX + (Math.random() - 0.5) * 0.6,
+          this.playerY + 0.5 + Math.random() * 0.9,
+          this.playerZ + 0.2,
+          0xa855f7,
+          1,
+          1.8
+        );
+      }
+      if (this.stealthTimer <= 0) {
+        this.setStealthVisual(false);
+      }
+    }
+
     if (this.hoverboardTimer > 0) this.hoverboardTimer = Math.max(0, this.hoverboardTimer - dt);
     if (this.invulnTimer > 0) this.invulnTimer = Math.max(0, this.invulnTimer - dt);
     if (this.stumbleTimer > 0) this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
     if (this.landingSquash > 0) this.landingSquash = Math.max(0, this.landingSquash - dt * 5.2);
 
-    if (this.boostTimer > 0) {
-      this.boostTimer = Math.max(0, this.boostTimer - dt);
+    if (this.zeroMevTimer > 0) {
+      this.zeroMevTimer = Math.max(0, this.zeroMevTimer - dt);
       audioEngine.setBoostTempo(true);
-      if (Math.random() < 0.7) {
+      if (Math.random() < 0.85) {
         this.spawnParticles(
-          this.playerX + (Math.random() - 0.5) * 0.5,
-          this.playerY + 0.7 + Math.random() * 0.6,
-          this.playerZ + 0.4,
-          0xc084fc,
-          1,
-          2.2
+          this.playerX + (Math.random() - 0.5) * 0.65,
+          this.playerY + 0.65 + Math.random() * 0.75,
+          this.playerZ + 0.45,
+          Math.random() < 0.5 ? 0xe879f9 : 0xc084fc,
+          2,
+          3.1
         );
       }
     } else {
@@ -1454,15 +1548,15 @@ export class FlutonEngine {
     }
 
     this.baseSpeed = Math.min(33, 16.5 + this.distance * 0.0085);
-    const targetSpeed = this.boostTimer > 0 ? this.baseSpeed + 13.5 : this.baseSpeed;
+    const targetSpeed = this.zeroMevTimer > 0 ? this.baseSpeed + 13.5 : this.baseSpeed;
     this.currentSpeed = THREE.MathUtils.damp(this.currentSpeed, targetSpeed, 6, dt);
 
     const stepZ = this.currentSpeed * dt;
+    const prevPlayerZ = this.playerZ;
     this.playerZ -= stepZ;
     this.distance += stepZ;
-
-    const activeMult = this.multiplierTimer > 0 ? 2 : 1;
-    this.score += stepZ * 2.2 * activeMult;
+    this.score += stepZ * 2.2;
+    this.checkGFlutonBannerCrossings(prevPlayerZ, this.playerZ);
 
     const targetX = LANE_X[this.targetLane + 1];
     const prevX = this.playerX;
@@ -1513,9 +1607,15 @@ export class FlutonEngine {
     this.playerRig.shieldShell.rotation.y += dt * 2.5;
 
     const onBoard = this.hoverboardTimer > 0;
-    this.playerRig.speedRing.visible = onBoard || this.boostTimer > 0;
+    this.playerRig.speedRing.visible = onBoard || this.zeroMevTimer > 0;
     if (this.playerRig.speedRing.visible) {
       this.playerRig.speedRing.scale.setScalar(1 + Math.sin(this.elapsed * 14) * 0.12);
+    }
+
+    this.playerRig.magnetRing.visible = this.settlementTimer > 0;
+    if (this.playerRig.magnetRing.visible) {
+      this.playerRig.magnetRing.rotation.z += dt * 4.2;
+      this.playerRig.magnetRing.scale.setScalar(1 + Math.sin(this.elapsed * 10) * 0.08);
     }
 
     this.hoverboardRig.root.visible = onBoard;
@@ -1560,7 +1660,7 @@ export class FlutonEngine {
     this.recycleChunks();
     this.populateAhead();
 
-    const targetFov = this.boostTimer > 0 ? 70 : 60 + (this.currentSpeed - 16.5) * 0.25;
+    const targetFov = this.zeroMevTimer > 0 ? 70 : 60 + (this.currentSpeed - 16.5) * 0.25;
     this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 6, dt);
     if (Math.abs(this.camera.fov - this.lastCameraFov) > 0.06) {
       this.camera.updateProjectionMatrix();
@@ -1656,15 +1756,24 @@ export class FlutonEngine {
         if (obs.withRamp && this.playerZ > obs.z + halfL - 0.4) continue;
       }
 
-      // 1. Boost invincibly blasts obstacles aside
-      if (this.boostTimer > 0) {
+      // 1. ZERO MEV speed boost invincibly blasts obstacles aside
+      if (this.zeroMevTimer > 0) {
         this.spawnParticles(obsX, 1.4, obs.z, 0xc084fc, 14, 7.5);
         this.releaseObstacleAt(i);
         audioEngine.playShieldSave();
         continue;
       }
 
-      // 2. Hoverboard or Shield protection absorbs hit BEFORE fatal Game Over
+      // 2. ENCRYPTED INTENTS stealth mode safely phases past obstacles/trains
+      if (this.stealthTimer > 0) {
+        audioEngine.playStealthPhase();
+        if (Math.random() < 0.45) {
+          this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xa855f7, 2, 2.6);
+        }
+        continue;
+      }
+
+      // 3. Hoverboard or FHE Shield protection absorbs hit BEFORE fatal Game Over
       if (this.hoverboardTimer > 0 || this.hasShield) {
         if (this.hoverboardTimer > 0) {
           this.hoverboardTimer = 0;
@@ -1672,7 +1781,8 @@ export class FlutonEngine {
           this.showBanner('HOVERBOARD SAVED YOU!');
         } else {
           this.hasShield = false;
-          this.showBanner('FLUTON SHIELD ABSORBED HIT!');
+          this.fheTimer = 0;
+          this.showBanner('FHE SHIELD ABSORBED HIT!');
         }
         this.invulnTimer = 1.45;
         this.chaseDist = 3.2;
@@ -1684,7 +1794,7 @@ export class FlutonEngine {
         continue;
       }
 
-      // 3. Side-glancing train scrape causes stumble once; second hit or head-on is fatal
+      // 4. Side-glancing train scrape causes stumble once; second hit or head-on is fatal
       const isGlancing = dx > halfW * 0.68 && this.stumbleTimer <= 0;
       if (isGlancing && (obs.kind === 'train_static' || obs.kind === 'train_moving')) {
         this.stumbleTimer = 3.2;
@@ -1698,12 +1808,46 @@ export class FlutonEngine {
         continue;
       }
 
-      // 4. Fatal Collision -> IMMEDIATELY stop all movement & enter COLLISION sequence!
+      // 5. Fatal Collision -> IMMEDIATELY stop all movement & enter COLLISION sequence!
       this.triggerCollision();
       return true;
     }
 
     return false;
+  }
+
+  private setStealthVisual(active: boolean): void {
+    if (this.isStealthVisualActive === active) return;
+    this.isStealthVisualActive = active;
+
+    const mats = [
+      this.playerRig.furMat,
+      this.playerRig.suitMat,
+      this.playerRig.shirtMat,
+      this.playerRig.trimMat,
+    ];
+    for (const mat of mats) {
+      mat.transparent = active;
+      mat.opacity = active ? 0.56 : 1;
+      mat.depthWrite = !active;
+      mat.needsUpdate = true;
+    }
+
+    if (active) {
+      this.playerRig.furMat.emissive.setHex(0x6b21a8);
+      this.playerRig.furMat.emissiveIntensity = 0.72;
+      this.playerRig.suitMat.emissive.setHex(0x581c87);
+      this.playerRig.suitMat.emissiveIntensity = 0.65;
+      this.playerRig.shirtMat.emissive.setHex(0xc084fc);
+      this.playerRig.shirtMat.emissiveIntensity = 0.45;
+    } else {
+      this.playerRig.furMat.emissive.setHex(0x000000);
+      this.playerRig.furMat.emissiveIntensity = 0;
+      this.playerRig.suitMat.emissive.setHex(0x000000);
+      this.playerRig.suitMat.emissiveIntensity = 0;
+      this.playerRig.shirtMat.emissive.setHex(0x000000);
+      this.playerRig.shirtMat.emissiveIntensity = 0;
+    }
   }
 
   private triggerCollision(): void {
@@ -1719,20 +1863,27 @@ export class FlutonEngine {
     this.velY = 0;
     this.slideTimer = 0;
     this.rollSpin = 0;
-    this.boostTimer = 0;
-    this.magnetTimer = 0;
-    this.multiplierTimer = 0;
+    this.fheTimer = 0;
+    this.zeroMevTimer = 0;
+    this.stealthTimer = 0;
+    this.settlementTimer = 0;
+    this.hasShield = false;
+    this.setStealthVisual(false);
     this.hoverboardTimer = 0;
     this.hoverboardRig.root.visible = false;
     this.playerRig.speedRing.visible = false;
     this.playerRig.shieldShell.visible = false;
+    this.playerRig.magnetRing.visible = false;
     this.bannerMessage = null;
+    this.pickupBanner = null;
+    this.pickupBannerTimer = 0;
 
     // Slight step-back from point of impact so cat doesn't clip deep inside front mesh
     this.playerZ += 0.45;
     this.playerRig.root.position.set(this.playerX, this.playerY, this.playerZ);
 
     audioEngine.setBoostTempo(false);
+    audioEngine.stopBannerVoice();
     audioEngine.playCollisionImpact();
 
     this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xef4444, 18, 6.5);
@@ -1816,8 +1967,7 @@ export class FlutonEngine {
   private updateTokens(dt: number): void {
     if (this.collisionLocked || this.phase !== 'playing') return;
 
-    const magnetActive = this.magnetTimer > 0;
-    const mult = this.multiplierTimer > 0 ? 2 : 1;
+    const magnetActive = this.settlementTimer > 0;
 
     for (let i = this.tokens.length - 1; i >= 0; i--) {
       const tok = this.tokens[i];
@@ -1835,14 +1985,14 @@ export class FlutonEngine {
       const dz = tok.z - this.playerZ;
       const distSq = dx * dx + dy * dy + dz * dz;
 
-      if (magnetActive && !tok.collected && distSq < 150) {
+      if (magnetActive && !tok.collected && distSq < 185) {
         tok.magnetized = true;
       }
 
       if (tok.magnetized) {
-        tok.x = THREE.MathUtils.damp(tok.x, this.playerX, 14, dt);
-        tok.y = THREE.MathUtils.damp(tok.y, this.playerY + 0.95, 14, dt);
-        tok.z = THREE.MathUtils.damp(tok.z, this.playerZ, 16, dt);
+        tok.x = THREE.MathUtils.damp(tok.x, this.playerX, 15, dt);
+        tok.y = THREE.MathUtils.damp(tok.y, this.playerY + 0.95, 15, dt);
+        tok.z = THREE.MathUtils.damp(tok.z, this.playerZ, 17, dt);
         tok.mesh.position.set(tok.x, tok.y, tok.z);
       }
 
@@ -1854,7 +2004,7 @@ export class FlutonEngine {
       if (hitDistSq < 1.35) {
         tok.collected = true;
         this.runTokens += 1;
-        this.score += 15 * mult;
+        this.score += 15;
         audioEngine.playTokenCollect();
         this.spawnParticles(tok.x, tok.y, tok.z, 0xc084fc, 5, 3.8);
         tok.mesh.visible = false;
@@ -1869,14 +2019,37 @@ export class FlutonEngine {
 
     for (let i = this.powerUps.length - 1; i >= 0; i--) {
       const pu = this.powerUps[i];
+
+      if (pu.collected) {
+        pu.collectAnim += dt;
+        const p = Math.min(1, pu.collectAnim / 0.18);
+        const s = Math.max(0.01, 1 - p);
+        pu.mesh.scale.setScalar(s);
+        pu.mesh.position.y += dt * 3.8;
+        const spinObj = pu.mesh.userData.spinGroup as THREE.Object3D | undefined;
+        if (spinObj) spinObj.rotation.y += dt * 14;
+        if (p >= 1) {
+          pu.mesh.visible = false;
+          pu.mesh.scale.setScalar(1);
+          pu.slot.inUse = false;
+          this.powerUps.splice(i, 1);
+        }
+        continue;
+      }
+
       if (pu.z > this.playerZ + 14) {
         pu.mesh.visible = false;
+        pu.mesh.scale.setScalar(1);
         pu.slot.inUse = false;
         this.powerUps.splice(i, 1);
         continue;
       }
 
-      pu.mesh.rotation.y += dt * 2.6;
+      // Spin ONLY the 3D power-up body so the overhead camera-facing label stays readable!
+      const spinObj = pu.mesh.userData.spinGroup as THREE.Object3D | undefined;
+      if (spinObj) {
+        spinObj.rotation.y += dt * 2.5;
+      }
       pu.mesh.position.y = pu.y + Math.sin(this.elapsed * 4 + i) * 0.14;
 
       const px = LANE_X[pu.lane + 1];
@@ -1885,36 +2058,73 @@ export class FlutonEngine {
         (pu.y - (this.playerY + 0.95)) ** 2 +
         (pu.z - this.playerZ) ** 2;
 
-      if (distSq < 1.6) {
+      if (distSq < 1.65) {
+        // Lock immediately so +10 coins and power-up trigger EXACTLY ONCE per pickup
+        pu.collected = true;
+        pu.collectAnim = 0.001;
         this.activatePowerUp(pu.type);
-        this.spawnParticles(px, pu.y, pu.z, 0xe879f9, 14, 5.5);
-        pu.mesh.visible = false;
-        pu.slot.inUse = false;
-        this.powerUps.splice(i, 1);
+        this.spawnParticles(px, pu.y, pu.z, 0xe879f9, 16, 6.2);
       }
     }
   }
 
-  private activatePowerUp(type: PowerUpType): void {
+  private activatePowerUp(type: CollectiblePowerUpType): void {
     this.powerupsUsedCount++;
-    audioEngine.playPowerUp(type);
 
-    if (type === 'magnet') {
-      this.magnetTimer = 10;
-      this.showBanner('FLUTON MAGNET — 10s');
-    } else if (type === 'shield') {
+    // Core Reward Mechanic: award EXACTLY 10 bonus Fluton logo coins per pickup
+    this.runTokens += 10;
+    audioEngine.playPowerUp(type);
+    audioEngine.playBonusCoinsReward();
+
+    if (type === 'fhe') {
+      this.fheTimer = 10;
       this.hasShield = true;
-      this.showBanner('FLUTON SHIELD EQUIPPED');
-    } else if (type === 'boost') {
-      this.boostTimer = 5.5;
-      this.showBanner('FLUTON HYPER BOOST!');
-    } else if (type === 'hoverboard') {
-      this.hoverboardTimer = 10;
-      this.showBanner('FLUTON HOVERBOARD!');
-    } else if (type === 'multiplier') {
-      this.multiplierTimer = 12;
-      this.showBanner('2× SCORE MULTIPLIER!');
+      this.pickupBanner = {
+        id: this.nextPickupBannerId++,
+        type: 'fhe',
+        title: 'FHE',
+        subtitle: 'Fully Homomorphic Encryption Shield',
+        bonusText: '+10 FLUTON COINS',
+      };
+      this.pickupBannerTimer = 2.4;
+      this.spawnParticles(this.playerX, this.playerY + 1.1, this.playerZ, 0xa855f7, 14, 4.5);
+    } else if (type === 'zero_mev') {
+      this.zeroMevTimer = 6;
+      this.pickupBanner = {
+        id: this.nextPickupBannerId++,
+        type: 'zero_mev',
+        title: 'ZERO MEV',
+        subtitle: 'Lightning Speed Boost',
+        bonusText: '+10 FLUTON COINS',
+      };
+      this.pickupBannerTimer = 2.4;
+      this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xe879f9, 16, 6.5);
+    } else if (type === 'encrypted_intents') {
+      this.stealthTimer = 8;
+      this.setStealthVisual(true);
+      this.pickupBanner = {
+        id: this.nextPickupBannerId++,
+        type: 'encrypted_intents',
+        title: 'ENCRYPTED INTENTS',
+        subtitle: 'Stealth Phase Protection',
+        bonusText: '+10 FLUTON COINS',
+      };
+      this.pickupBannerTimer = 2.4;
+      this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0x9333ea, 16, 4.8);
+    } else if (type === 'confidential_settlement') {
+      this.settlementTimer = 10;
+      this.pickupBanner = {
+        id: this.nextPickupBannerId++,
+        type: 'confidential_settlement',
+        title: 'CONFIDENTIAL SETTLEMENT',
+        subtitle: 'Orbital Coin Magnet',
+        bonusText: '+10 FLUTON COINS',
+      };
+      this.pickupBannerTimer = 2.4;
+      this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xf0abfc, 16, 5.2);
     }
+
+    this.emitHud(true);
   }
 
   private updateChase(dt: number): void {
@@ -1953,6 +2163,19 @@ export class FlutonEngine {
     }
   }
 
+  private checkGFlutonBannerCrossings(prevZ: number, currZ: number): void {
+    if (this.collisionLocked || this.phase !== 'playing') return;
+    for (let i = 0; i < this.chunks.length; i++) {
+      const chunk = this.chunks[i];
+      if (!chunk.hasGFlutonBanner || chunk.bannerAnnounced) continue;
+      const bannerWorldZ = chunk.zStart + chunk.bannerZOffset;
+      if (prevZ > bannerWorldZ && currZ <= bannerWorldZ) {
+        chunk.bannerAnnounced = true;
+        audioEngine.playGFlutonBannerVoice();
+      }
+    }
+  }
+
   private recycleChunks(): void {
     const totalSpan = NUM_CHUNKS * CHUNK_LEN;
     for (let i = 0; i < this.chunks.length; i++) {
@@ -1960,6 +2183,7 @@ export class FlutonEngine {
       if (chunk.zStart > this.playerZ + CHUNK_LEN * 1.2) {
         chunk.zStart -= totalSpan;
         chunk.group.position.z = chunk.zStart;
+        chunk.bannerAnnounced = false;
       }
     }
   }
@@ -2030,12 +2254,50 @@ export class FlutonEngine {
       this.spawnBarrier(lane === 0 ? 1 : 0, z, 'overhead');
     }
 
-    if (Math.random() < 0.32) {
-      const types: PowerUpType[] = ['magnet', 'shield', 'boost', 'hoverboard', 'multiplier'];
-      const pType = types[Math.floor(Math.random() * types.length)];
-      const pLane = (Math.floor(Math.random() * 3) - 1) as LaneIndex;
-      this.spawnPowerUp(pType, pLane, 1.05, z - 11);
+    this.trySpawnPowerUpForWave(z - 12);
+  }
+
+  private trySpawnPowerUpForWave(spawnZ: number): void {
+    // Keep clean spacing so power-ups feel rewarding and never cluster together
+    if (this.lastPowerUpSpawnZ - spawnZ < 58) return;
+    if (Math.random() > 0.58) return;
+
+    const types: CollectiblePowerUpType[] = [
+      'fhe',
+      'zero_mev',
+      'encrypted_intents',
+      'confidential_settlement',
+    ];
+    const pool = this.lastPowerUpType
+      ? types.filter((t) => t !== this.lastPowerUpType)
+      : types;
+    const pType = pool[Math.floor(Math.random() * pool.length)];
+
+    const lanes = ([-1, 0, 1] as LaneIndex[]).sort(() => Math.random() - 0.5);
+    for (const lane of lanes) {
+      const y = this.getPowerUpSafeY(lane, spawnZ);
+      if (y !== null) {
+        this.spawnPowerUp(pType, lane, y, spawnZ);
+        this.lastPowerUpSpawnZ = spawnZ;
+        this.lastPowerUpType = pType;
+        break;
+      }
     }
+  }
+
+  private getPowerUpSafeY(lane: LaneIndex, z: number): number | null {
+    for (let i = 0; i < this.obstacles.length; i++) {
+      const obs = this.obstacles[i];
+      if (obs.lane !== lane) continue;
+      const halfL = obs.length * 0.5 + 2.4;
+      if (Math.abs(z - obs.z) <= halfL) {
+        if (obs.kind === 'train_static' && obs.withRamp && Math.abs(z - obs.z) <= obs.length * 0.4) {
+          return TRAIN_HEIGHT + 1.05;
+        }
+        return null;
+      }
+    }
+    return 1.05;
   }
 
   private acquireTrainSlot(paletteIndex: number, withRamp: boolean): PooledTrainSlot {
@@ -2206,11 +2468,28 @@ export class FlutonEngine {
     });
   }
 
-  private spawnPowerUp(type: PowerUpType, lane: LaneIndex, y: number, z: number): void {
+  private spawnPowerUp(
+    type: CollectiblePowerUpType,
+    lane: LaneIndex,
+    y: number,
+    z: number
+  ): void {
     const slot = this.acquirePowerUpSlot(type);
     slot.mesh.position.set(LANE_X[lane + 1], y, z);
+    slot.mesh.scale.setScalar(1);
+    const spinObj = slot.mesh.userData.spinGroup as THREE.Object3D | undefined;
+    if (spinObj) spinObj.rotation.set(0, 0, 0);
     slot.mesh.visible = true;
-    this.powerUps.push({ type, lane, y, z, slot, mesh: slot.mesh });
+    this.powerUps.push({
+      type,
+      lane,
+      y,
+      z,
+      collected: false,
+      collectAnim: 0,
+      slot,
+      mesh: slot.mesh,
+    });
   }
 
   private spawnParticles(
@@ -2276,7 +2555,7 @@ export class FlutonEngine {
   }
 
   private animateRunCycle(dt: number, playAudio: boolean, onTrain = false): void {
-    this.runCycle += dt * (this.boostTimer > 0 ? 18 : 13.5);
+    this.runCycle += dt * (this.zeroMevTimer > 0 ? 18 : 13.5);
     const s = Math.sin(this.runCycle);
     const c = Math.cos(this.runCycle);
 
@@ -2422,11 +2701,39 @@ export class FlutonEngine {
   private emitHud(force: boolean): void {
     this.lastHudEmit = this.elapsed;
     const activePowerUps: ActivePowerUpHUD[] = [];
-    if (this.magnetTimer > 0) {
+    if (this.hasShield && this.fheTimer > 0) {
       activePowerUps.push({
-        type: 'magnet',
-        label: 'Magnet',
-        remaining: this.magnetTimer,
+        type: 'fhe',
+        label: 'FHE',
+        subtitle: 'Encryption Shield',
+        remaining: this.fheTimer,
+        duration: 10,
+      });
+    }
+    if (this.zeroMevTimer > 0) {
+      activePowerUps.push({
+        type: 'zero_mev',
+        label: 'ZERO MEV',
+        subtitle: 'Speed Boost',
+        remaining: this.zeroMevTimer,
+        duration: 6,
+      });
+    }
+    if (this.stealthTimer > 0) {
+      activePowerUps.push({
+        type: 'encrypted_intents',
+        label: 'ENCRYPTED INTENTS',
+        subtitle: 'Stealth Phase',
+        remaining: this.stealthTimer,
+        duration: 8,
+      });
+    }
+    if (this.settlementTimer > 0) {
+      activePowerUps.push({
+        type: 'confidential_settlement',
+        label: 'CONFIDENTIAL SETTLEMENT',
+        subtitle: 'Coin Magnet',
+        remaining: this.settlementTimer,
         duration: 10,
       });
     }
@@ -2437,25 +2744,6 @@ export class FlutonEngine {
         remaining: this.hoverboardTimer,
         duration: 10,
       });
-    }
-    if (this.boostTimer > 0) {
-      activePowerUps.push({
-        type: 'boost',
-        label: 'Boost',
-        remaining: this.boostTimer,
-        duration: 5.5,
-      });
-    }
-    if (this.multiplierTimer > 0) {
-      activePowerUps.push({
-        type: 'multiplier',
-        label: '2× Score',
-        remaining: this.multiplierTimer,
-        duration: 12,
-      });
-    }
-    if (this.hasShield) {
-      activePowerUps.push({ type: 'shield', label: 'Shield', remaining: 1, duration: 1 });
     }
 
     if (!force && this.phase === 'menu') return;
@@ -2468,11 +2756,13 @@ export class FlutonEngine {
       totalTokens: this.totalTokens,
       distance: Math.floor(this.distance),
       speedKmh: Math.round(this.currentSpeed * 3.6),
-      multiplier: this.multiplierTimer > 0 ? 2 : 1,
+      multiplier: 1,
       hasShield: this.hasShield,
+      stealthActive: this.stealthTimer > 0,
       hoverboardActive: this.hoverboardTimer > 0,
       hoverboardCharge: Math.round(this.hoverboardCharge),
       activePowerUps,
+      pickupBanner: this.pickupBanner,
       introCaption: this.getIntroCaption(),
       isNewBest: this.score > 0 && Math.floor(this.score) > this.bestScore,
       chaseProximity: THREE.MathUtils.clamp((6.0 - this.chaseDist) / 3.5, 0, 1),
@@ -2490,6 +2780,7 @@ export class FlutonEngine {
     el.removeEventListener('touchend', this.handleTouchEnd);
     el.removeEventListener('webglcontextlost', this.handleContextLost);
     audioEngine.stopMusic();
+    audioEngine.stopBannerVoice();
 
     this.assets.dispose();
     this.skyTex?.dispose();
